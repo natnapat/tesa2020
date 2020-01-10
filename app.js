@@ -1,63 +1,114 @@
+const axios = require('axios');
 const tf = require('@tensorflow/tfjs-node');
-const plotly = require('plotly')("kotesa1","BBALHGgk9gQ55slloNod");
+const fs = require('fs');
+const csv = require('csv-parser');
 
-const num_pts = 50;
-const num_nodes = 10;
-const epochs = 30;
+var rssis = [];
+var labels = [];
+var xs = [];
+var ys = [];
+var model;
 
-function createData (num_pts){
-  var xs = [];
-  var ys = [];
-    for(let i=0; i<=num_pts; i++){
-      xs.push(i);
-      ys.push(2*xs[i] + Math.random(0,1));
-    }
-    return [xs,ys];
-}
-
-function createModel(num_nodes){
-  const model = tf.sequential();
-  model.add(tf.layers.dense({units: num_nodes, activation: 'relu', inputShape: [num_pts,1]}));
-  model.compile({
-    optimizer: 'sgd',
-    loss: 'meanSquaredError',
-  });
-  return model;
-}
-
-function trainModel(model, xs, ys, epochs){
-  const h = model.fit(xs, ys, {batchSize: 64, epochs: epochs});
-  return h.history;
-}
-
-function predictModel(){
-  var yv = [];
-  var xv = model.predict(x_test);
-
-  for(let i=0; i<=xv.length; i++){
-    yv.push(2*xv[i] + Math.random(0,1));
-  }
-
-  return [xv,yv];
-}
-
-function plotResults(xv,yv){
-  var data = [{x:xv, y:yv, type: 'bar'}];
-  var layout = {fileopt : "overwrite", filename : "simple-node-example"};
-
-  plotly.plot(data, layout, function (err, msg) {
-	if (err) return console.log(err);
-	  console.log(msg);
+function readCSV() {
+  return new Promise(function(resolve, reject) {
+    fs.createReadStream('dataGateway.csv')
+    .pipe(csv())
+    .on('data', (row) => {
+        rssis.push( [parseInt(row.G1), parseInt(row.G2), parseInt(row.G3), parseInt(row.G4)] )
+        labels.push( parseInt(row.label) )
+    })
+    .on('end', () => {
+        console.log('CSV file successfully processed');
+        resolve( labels )
+    });
   });
 }
 
-async function main(){
+async function prepareData(){
+  await readCSV();
   
-  var train = createData(num_pts);
-  const model = createModel(num_nodes);
-  var loss = trainModel(model,train[0],train[1],epochs);
-  console.log(loss);
-  plotResults(results[0],results[1]);
+  xs = tf.tensor2d(rssis);
+  const labelsTensor = tf.tensor1d(labels, 'int32');
+  ys = tf.oneHot(labelsTensor,4);
+  // xs.print();
+  // ys.print();
+  // console.log(labels);
 }
 
-main();
+function model() {
+  model = tf.sequential();
+
+  model.add(tf.layers.dense({
+    units: 16,
+    activation: 'sigmoid',
+    inputShape: [4],
+  }));
+  model.add(tf.layers.dense({
+    units: 4,
+    activation: 'softmax',
+  }));
+
+  const lr = 0.1;
+  const optimizer = tf.train.sgd(lr);
+  model.compile({
+    optimizer: optimizer,
+    loss: 'categoricalCrossentropy',
+  })
+  
+  train();
+  
+}
+
+async function train() {
+  const options = {
+    epochs: 50,
+    validationSplit: 0.1,
+    shuffle: true,
+    callbacks : {
+      onEpochEnd: (num,logs) => {
+        console.log(logs);
+      }
+    }
+  }
+  await model.fit(xs,ys,options)
+  await model.save('file://model');
+}
+
+async function postModel() {
+  var body = {}
+
+  // await axios({
+  //   method: 'post',
+  //   url: '/addUser',
+  //   data: body
+  // })
+  // .then(function (response) {
+  //   console.log(response);
+  // })
+  // .catch(function (error) {
+  //   console.log(error);
+  // });
+
+
+} 
+
+async function predict(){
+  axios.get('http://webcode.me').then(resp => {
+    console.log(resp.data);
+  });
+  let xv = tf.tensor2d([[-74,-43,-50,-53]]);
+  let results = model.predict(xv);
+  let index =results.argMax(1);
+  index.print(); 
+
+}
+
+async function run(){
+  await prepareData();
+  await model();
+  await postModel();
+  await predict();
+}
+
+run();
+
